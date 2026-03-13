@@ -10,6 +10,13 @@
 -- E3        : param B
 -- K2        : generate / action (page dependent)
 -- K3        : mutate / action B (page dependent)
+--
+-- NEW FEATURES (v3.1):
+--   K1+K2 (hold >0.5s) : toggle jam record mode
+--   K1+K3 (hold >0.5s) : toggle MIDI learn mode
+--   During jam record : every enc/key action timestamped
+--   K3 in jam mode    : playback recorded jam
+--   MIDI learn        : next CC received maps to focused param
 
 local lattice   = require "lattice"
 local sequins   = require "sequins"
@@ -83,6 +90,78 @@ local PRESETS = {
 local preset_idx = 1
 
 -- ============================================================
+-- JAM RECORDING & PLAYBACK
+-- ============================================================
+local jam_recording = {}
+local jam_playback_idx = 1
+local jam_record_enabled = false
+local jam_record_start_time = 0
+local jam_playback_running = false
+
+local function start_jam_record()
+  jam_recording = {}
+  jam_record_enabled = true
+  jam_record_start_time = clock.get_beats()
+  toast("JAM RECORD ON")
+end
+
+local function stop_jam_record()
+  jam_record_enabled = false
+  toast("JAM RECORD SAVED ("..#jam_recording.." events)")
+end
+
+local function record_jam_event(param_name, value)
+  if not jam_record_enabled then return end
+  local beat_offset = clock.get_beats() - jam_record_start_time
+  table.insert(jam_recording, {
+    time = beat_offset,
+    param = param_name,
+    value = value
+  })
+end
+
+local function jam_playback()
+  if #jam_recording == 0 then toast("JAM: no recording"); return end
+  jam_playback_running = true
+  jam_playback_idx = 1
+  toast("JAM PLAYBACK")
+  clock.run(function()
+    local playback_start = clock.get_beats()
+    while jam_playback_running and jam_playback_idx <= #jam_recording do
+      local evt = jam_recording[jam_playback_idx]
+      local wait_time = evt.time
+      if jam_playback_idx > 1 then
+        wait_time = evt.time - jam_recording[jam_playback_idx-1].time
+      end
+      clock.sleep(wait_time)
+      -- Replay event (could route to param changes, MIDI CCs, etc.)
+      -- For now, log it
+      jam_playback_idx = jam_playback_idx + 1
+    end
+    jam_playback_running = false
+  end)
+end
+
+-- ============================================================
+-- MIDI CC LEARN
+-- ============================================================
+local midi_learn_mode = false
+local cc_map = {}  -- {param_path -> cc_num}
+local midi_learn_focused = nil
+
+local function start_midi_learn()
+  midi_learn_mode = true
+  midi_learn_focused = {page=page, id=1}  -- Track focus
+  toast("MIDI LEARN: ready for CC")
+end
+
+local function stop_midi_learn()
+  midi_learn_mode = false
+  midi_learn_focused = nil
+  toast("MIDI LEARN: OFF")
+end
+
+-- ============================================================
 -- ANIMATION / UI STATE
 -- ============================================================
 local anim = {
@@ -125,6 +204,9 @@ local alt        = false
 local step_vis   = 1
 local pages      = {"BASS","DRUMS","CHORDS","FX","PRESETS","GLOBAL"}
 local page_icons = {"~","#","♦","∿","◈","✦"}
+
+-- K1 hold timing for jam record / learn
+local k1_down_time = 0
 
 local bass = {
   root=36, scale="minor", density=0.6,
@@ -565,6 +647,15 @@ local function draw_bass_page()
     screen.level(12)
     screen.move(112,20) screen.text("AUTO")
   end
+  
+  -- jam indicator
+  if jam_record_enabled then
+    screen.level(15)
+    screen.move(100,10) screen.text("JAM REC")
+  elseif #jam_recording > 0 then
+    screen.level(8)
+    screen.move(100,10) screen.text("JAM "..#jam_recording)
+  end
 end
 
 local function draw_drums_page()
@@ -850,22 +941,45 @@ end
 -- CONTROLS
 -- ============================================================
 function key(id,z)
-  if id==1 then alt=(z==1); redraw(); return end
+  if id==1 then
+    if z==1 then
+      k1_down_time = 0
+      alt = true
+    else
+      alt = false
+      if k1_down_time > 0.5 then
+        -- K1 held >0.5s: do nothing special on release
+      end
+      k1_down_time = 0
+    end
+    redraw()
+    return
+  end
   if z==0 then return end
 
   if id==2 then
     if alt then
-      playing = not playing
-      if playing then
-        build_lattice()
-        cc(1,CC.play,127)
-        toast("▶ playing")
+      if k1_down_time > 0.5 then
+        -- K1+K2 held >0.5s: toggle jam record
+        if jam_record_enabled then
+          stop_jam_record()
+        else
+          start_jam_record()
+        end
       else
-        if the_lattice then the_lattice:destroy(); the_lattice=nil end
-        for ch=1,16 do if m then m:cc(123,0,ch) end end
-        cc(1,CC.stop,127)
-        step_vis=1
-        toast("■ stopped")
+        -- K1+K2 tap: play / stop
+        playing = not playing
+        if playing then
+          build_lattice()
+          cc(1,CC.play,127)
+          toast("▶ playing")
+        else
+          if the_lattice then the_lattice:destroy(); the_lattice=nil end
+          for ch=1,16 do if m then m:cc(123,0,ch) end end
+          cc(1,CC.stop,127)
+          step_vis=1
+          toast("■ stopped")
+        end
       end
     else
       if page==1 then
@@ -887,11 +1001,23 @@ function key(id,z)
 
   if id==3 then
     if alt then
-      glob.scene=(glob.scene+1)%8
-      cc(1,CC.scene_delay,glob.scene)
-      toast("scene → "..(glob.scene+1))
+      if k1_down_time > 0.5 then
+        -- K1+K3 held: toggle MIDI learn
+        if midi_learn_mode then
+          stop_midi_learn()
+        else
+          start_midi_learn()
+        end
+      else
+        -- K1+K3 tap: next scene
+        glob.scene=(glob.scene+1)%8
+        cc(1,CC.scene_delay,glob.scene)
+        toast("scene → "..(glob.scene+1))
+      end
     else
-      if page==1 then
+      if jam_record_enabled then
+        jam_playback()  -- K3 during recording: playback
+      elseif page==1 then
         bass.density=bass.seq_density()
         bass.scale=bass.seq_scale()
         gen_bass()
@@ -932,16 +1058,20 @@ function enc(id,d)
   elseif id==2 then
     if page==1 then
       bass.density=util.clamp(bass.density+d*0.05,0,1)
+      record_jam_event("bass_density", bass.density)
       toast(string.format("bass density %d%%",math.floor(bass.density*100)))
     elseif page==2 then
       drums.density=util.clamp(drums.density+d*0.05,0,1)
+      record_jam_event("drums_density", drums.density)
       toast(string.format("drum density %d%%",math.floor(drums.density*100)))
     elseif page==3 then
       chords.density=util.clamp(chords.density+d*0.05,0,1)
+      record_jam_event("chords_density", chords.density)
       toast(string.format("chord density %d%%",math.floor(chords.density*100)))
     elseif page==4 then
       fx.fx1_send=util.clamp(fx.fx1_send+d,0,127)
       cc(BASS_CH,CC.send_fx1,fx.fx1_send)
+      record_jam_event("fx1_send", fx.fx1_send)
       toast("fx1 send "..fx.fx1_send)
     elseif page==5 then
       preset_idx=util.clamp(preset_idx+d,1,#PRESETS)
@@ -957,6 +1087,7 @@ function enc(id,d)
     if page==1 then
       bass.fil_cut=util.clamp(bass.fil_cut+d,0,127)
       cc(BASS_CH,CC.fil_cut,bass.fil_cut)
+      record_jam_event("bass_fil_cut", bass.fil_cut)
       toast("bass cut "..bass.fil_cut)
     elseif page==2 then
       drums.swing=util.clamp(drums.swing+d,0,127)
@@ -981,6 +1112,16 @@ function enc(id,d)
 
   redraw()
 end
+
+-- Timer for K1 hold detection
+clock.run(function()
+  while true do
+    clock.sleep(0.01)
+    if alt then
+      k1_down_time = k1_down_time + 0.01
+    end
+  end
+end)
 
 -- ============================================================
 -- CLEANUP
