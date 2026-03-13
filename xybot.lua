@@ -189,6 +189,15 @@ local anim = {
   -- encoder delta sparkle
   enc_spark   = {0,0,0},
   enc_dir     = {0,0,0},
+  
+  -- jam record pulse
+  jam_rec_pulse = 0,
+  
+  -- MIDI learn flash
+  learn_flash = 0,
+  
+  -- beat phase tracking (0-1)
+  beat_phase = 0,
 }
 
 local redraw_metro  -- metro for animation ticks
@@ -456,6 +465,7 @@ local function build_lattice()
         end)
       end
       anim.play_pulse=1.0
+      anim.beat_phase = 0
       redraw()
     end
   }
@@ -537,9 +547,10 @@ local function build_lattice()
 end
 
 -- ============================================================
--- ANIMATION METRO (60fps)
+-- ANIMATION METRO (~10fps for smooth screen updates)
 -- ============================================================
-local DECAY = 0.12   -- flash decay per frame at 60fps
+local ANIM_FPS = 10
+local DECAY = 0.15   -- flash decay per frame
 
 local function anim_tick()
   -- decay flashes
@@ -550,15 +561,26 @@ local function anim_tick()
   anim.chord_flash = decay(anim.chord_flash)
   anim.bass_flash  = decay(anim.bass_flash)
   anim.play_pulse  = decay(anim.play_pulse)
+  anim.jam_rec_pulse = decay(anim.jam_rec_pulse)
+  anim.learn_flash = decay(anim.learn_flash)
+  
   -- decay encoder sparks
   for i=1,3 do anim.enc_spark[i]=decay(anim.enc_spark[i]) end
+  
   -- page fade
-  anim.page_anim = math.min(1, anim.page_anim + 0.15)
+  anim.page_anim = math.min(1, anim.page_anim + 0.2)
+  
+  -- beat phase advance
+  if playing then
+    anim.beat_phase = math.min(1, anim.beat_phase + 0.12)
+  end
+  
   -- toast timer
   if anim.msg_timer > 0 then
-    anim.msg_timer = anim.msg_timer - (1/60)
+    anim.msg_timer = anim.msg_timer - (1/ANIM_FPS)
     if anim.msg_timer <= 0 then anim.msg="" end
   end
+  
   redraw()
 end
 
@@ -602,7 +624,7 @@ end
 local function draw_bass_page()
   local alpha = anim.page_anim
 
-  -- waveform display (main visual)
+  -- waveform display (main visual) with playhead
   local ww = 128
   local sw = ww / bass.steps
   for s=1,bass.steps do
@@ -628,33 +650,35 @@ local function draw_bass_page()
     end
   end
 
-  -- step cursor
+  -- playhead: position marker that moves with clock
   if playing then
-    local cx = math.floor((step_vis-1)*(128/bass.steps) + (128/bass.steps)/2)
-    screen.level(brightness(anim.play_pulse, 4, 15))
-    screen.move(cx, 54) screen.line(cx, 57) screen.stroke()
+    local ph_x = math.floor((step_vis-1)*sw + anim.beat_phase*sw)
+    screen.level(brightness(anim.play_pulse, 5, 15))
+    screen.move(ph_x, 54) screen.line(ph_x, 57) screen.stroke()
   end
 
-  -- params strip
+  -- params strip (secondary params at level 8, labels at 5)
   screen.level(3)
   screen.move(0,62) screen.line(128,62) screen.stroke()
-  lv(0,  63, "scl", bass.scale:sub(1,5),   3, 12)
-  lv(52, 63, "den", string.format("%d%%",math.floor(bass.density*100)), 3, 12)
-  lv(90, 63, "cut", bass.fil_cut, 3, 12)
+  lv(0,  63, "scl", bass.scale:sub(1,5),   5, 8)
+  lv(52, 63, "den", string.format("%d%%",math.floor(bass.density*100)), 5, 8)
+  lv(90, 63, "cut", bass.fil_cut, 5, 8)
 
-  -- auto badge
+  -- auto badge (active params at level 15)
   if bass.auto_mutate then
-    screen.level(12)
+    screen.level(15)
     screen.move(112,20) screen.text("AUTO")
   end
   
   -- jam indicator
   if jam_record_enabled then
-    screen.level(15)
-    screen.move(100,10) screen.text("JAM REC")
-  elseif #jam_recording > 0 then
-    screen.level(8)
-    screen.move(100,10) screen.text("JAM "..#jam_recording)
+    anim.jam_rec_pulse = 1.0
+    screen.level(brightness(anim.jam_rec_pulse, 8, 15))
+    screen.move(100,10) screen.text("REC")
+  elseif midi_learn_mode then
+    anim.learn_flash = 1.0
+    screen.level(brightness(anim.learn_flash, 4, 15))
+    screen.move(98,10) screen.text("LEARN")
   end
 end
 
@@ -667,8 +691,8 @@ local function draw_drums_page()
 
   for r,row in ipairs(rows) do
     local y = 24 + (r-1)*ystep
-    -- label with flash
-    screen.level(brightness(flashes[r], 4, 15))
+    -- label with flash (active at 15, secondary at 8)
+    screen.level(brightness(flashes[r], 5, 15))
     screen.move(0,y) screen.text(lbls[r])
 
     for s=1,drums.steps do
@@ -687,18 +711,26 @@ local function draw_drums_page()
     end
   end
 
-  -- groove bar
+  -- playhead for drums
+  if playing then
+    local sw = 7
+    local ph_x = xoff + (step_vis-1)*sw + anim.beat_phase*sw
+    screen.level(brightness(anim.play_pulse, 4, 12))
+    screen.move(ph_x, 52) screen.line(ph_x, 54) screen.stroke()
+  end
+
+  -- groove bar (labels at 5, secondary at 8)
   screen.level(3)
   screen.move(0,62) screen.line(128,62) screen.stroke()
-  lv(0, 63, "den", string.format("%d%%",math.floor(drums.density*100)), 3, 12)
-  lv(52,63, "swg", string.format("%+d",drums.swing-63), 3, 12)
+  lv(0, 63, "den", string.format("%d%%",math.floor(drums.density*100)), 5, 8)
+  lv(52,63, "swg", string.format("%+d",drums.swing-63), 5, 8)
   if drums.auto_mutate then
-    screen.level(12) screen.move(100,63) screen.text("AUTO")
+    screen.level(15) screen.move(100,63) screen.text("AUTO")
   end
 end
 
 local function draw_chords_page()
-  -- chord blocks across bottom half
+  -- chord blocks across bottom half with playhead
   local sw = 128/chords.steps
   for s=1,chords.steps do
     local x=(s-1)*sw
@@ -722,51 +754,52 @@ local function draw_chords_page()
     end
   end
 
-  -- step cursor
+  -- playhead for chords
   if playing then
-    local cx = math.floor((step_vis-1)*sw + sw/2)
+    local ph_x = math.floor((step_vis-1)*sw + anim.beat_phase*sw)
     screen.level(brightness(anim.chord_flash,3,12))
-    screen.move(cx,60) screen.line(cx,63) screen.stroke()
+    screen.move(ph_x,60) screen.line(ph_x,63) screen.stroke()
   end
 
+  -- params (labels at 5, secondary at 8, active at 13)
   screen.level(3)
   screen.move(0,21) screen.line(128,21) screen.stroke()
-  lv(0,  20, "typ", chords.chord_type,  3, 13)
-  lv(68, 20, "den", string.format("%d%%",math.floor(chords.density*100)), 3, 10)
-  lv(0,  63, "vel", chords.vel_base,    3, 12)
+  lv(0,  20, "typ", chords.chord_type,  5, 13)
+  lv(68, 20, "den", string.format("%d%%",math.floor(chords.density*100)), 5, 8)
+  lv(0,  63, "vel", chords.vel_base,    5, 8)
   if chords.auto_mutate then
-    screen.level(12) screen.move(100,63) screen.text("AUTO")
+    screen.level(15) screen.move(100,63) screen.text("AUTO")
   end
 end
 
 local function draw_fx_page()
-  -- big horizontal bars
+  -- big horizontal bars (labels at 5, secondary at 8)
   local labels = {"FX1","FX2","CUT","RES","LFO","AMT"}
   local vals   = {fx.fx1_send, fx.fx2_send, fx.fil_cut, fx.fil_res, fx.lfo_rate, fx.lfo_amt}
   local fills  = {14,10,12,8,11,9}
   for i=1,6 do
     local y = 17 + (i-1)*8
-    screen.level(4)
+    screen.level(5)
     screen.move(0,y) screen.text(labels[i])
-    pill_bar(20, y-6, 90, 5, vals[i], 127, 2, fills[i])
-    screen.level(6)
+    pill_bar(20, y-6, 90, 5, vals[i], 127, 3, fills[i])
+    screen.level(8)
     screen.move(114,y) screen.text(vals[i])
   end
 end
 
 local function draw_presets_page()
   local p = PRESETS[preset_idx]
-  -- big name
+  -- big name (active parameter)
   screen.level(15)
   screen.font_size(10)
   screen.move(0,24) screen.text(p.name)
   screen.font_size(8)
-  -- ch indicator
-  screen.level(5)
+  -- ch indicator (secondary)
+  screen.level(8)
   screen.move(0,34) screen.text("channel "..p.ch.."  ·  "..(#p.ccs).." params")
-  -- cc preview
+  -- cc preview (labels)
   for i=1,math.min(4,#p.ccs) do
-    screen.level(3)
+    screen.level(5)
     screen.move(0,34+i*7)
     local cc_names = {
       [32]="fil.cut",[33]="fil.res",[20]="atk",[21]="dec",
@@ -775,7 +808,7 @@ local function draw_presets_page()
     local cname = cc_names[p.ccs[i][1]] or ("cc"..p.ccs[i][1])
     screen.text(cname.." → "..p.ccs[i][2])
   end
-  -- nav
+  -- nav (structure at level 3)
   screen.level(6)
   screen.move(0,63)
   screen.text("◀ "..preset_idx.."/"..#PRESETS.." ▶   K2=apply")
@@ -784,13 +817,13 @@ end
 local function draw_global_page()
   local bpm = math.floor(40 + glob.tempo/127*180)
 
-  -- big BPM
+  -- big BPM (active parameter at 15)
   screen.font_size(16)
   screen.level(playing and 15 or 8)
   screen.move(0,35) screen.text(bpm.." bpm")
   screen.font_size(8)
 
-  -- scene indicator: dots
+  -- scene indicator: dots (structure at 3, active at 15)
   screen.level(5) screen.move(0,44) screen.text("scene")
   for i=0,7 do
     screen.level(i==glob.scene and 15 or 3)
@@ -798,8 +831,8 @@ local function draw_global_page()
     if i==glob.scene then screen.fill() else screen.stroke() end
   end
 
-  -- groove / mute strip
-  lv(0, 55, "grv", string.format("%+d",glob.groove-63), 3, 12)
+  -- groove / mute strip (labels at 5, values at 8)
+  lv(0, 55, "grv", string.format("%+d",glob.groove-63), 5, 8)
   -- mute dots
   local function mute_btn(x,y,label,muted)
     screen.level(muted and 3 or 11)
@@ -816,7 +849,7 @@ local function draw_global_page()
   screen.level(3)
   screen.move(0,63) screen.text("E2=tempo  E3=scene  K3=auto")
   if glob.auto_scene then
-    screen.level(12) screen.move(100,63) screen.text("AUTO")
+    screen.level(15) screen.move(100,63) screen.text("AUTO")
   end
 end
 
@@ -825,37 +858,51 @@ end
 -- ============================================================
 function redraw()
   screen.clear()
-  screen.aa(0)
+  screen.aa(1)  -- anti-alias enabled for smooth lines
   screen.font_size(8)
 
-  -- ---- HEADER ----
-  -- play state
-  local play_lvl = playing and brightness(anim.play_pulse,8,15) or 3
+  -- ---- STATUS STRIP (y 0-8) ----
+  -- play state indicator
+  local play_lvl = playing and brightness(anim.play_pulse,8,15) or 4
   screen.level(play_lvl)
   screen.move(0,8)
   screen.text(playing and "▶" or "■")
 
-  -- page icon + name
-  screen.level(math.floor(anim.page_anim*15))
-  screen.move(10,8)
-  screen.text(page_icons[page].." "..pages[page])
+  -- title "XYBOT" at level 4 top-left
+  screen.level(4)
+  screen.move(8,8)
+  screen.text("XYBOT")
 
-  -- step counter (top right)
-  screen.level(playing and 6 or 2)
-  screen.move(100,8) screen.text(string.format("%02d",step_vis))
-
-  -- voice flash indicators top right area
-  local function vdot(x,flash,lbl)
-    screen.level(brightness(flash,2,15))
-    screen.move(x,8) screen.text(lbl)
+  -- page indicator: 6 small dots, current page filled at 12, others at 3
+  for i=1,6 do
+    screen.level(i==page and 12 or 3)
+    screen.rect(64 + (i-1)*8, 2, 4, 4)
+    if i==page then screen.fill() else screen.stroke() end
   end
-  vdot(116,anim.kick_flash,  "K")
-  vdot(121,anim.snare_flash, "S")
-  vdot(126,anim.hat_flash,   "H")
 
-  -- header line
+  -- page name at level 8 center
+  screen.level(8)
+  screen.move(56, 8)
+  screen.text(pages[page])
+
+  -- beat pulse dot at x=124
+  screen.level(brightness(anim.beat_phase, 3, 12))
+  screen.rect(123, 5, 3, 3) screen.fill()
+
+  -- header line (structure/dividers at level 3)
   screen.level(3)
   screen.move(0,9) screen.line(128,9) screen.stroke()
+
+  -- ---- JAM RECORD / LEARN INDICATORS ----
+  if jam_record_enabled then
+    anim.jam_rec_pulse = 1.0
+    screen.level(brightness(anim.jam_rec_pulse, 8, 15))
+    screen.move(110,18) screen.text("REC")
+  elseif midi_learn_mode then
+    anim.learn_flash = 1.0
+    screen.level(brightness(anim.learn_flash, 4, 15))
+    screen.move(106,18) screen.text("LEARN")
+  end
 
   -- ---- TOAST MESSAGE ----
   if anim.msg ~= "" and anim.msg_timer > 0 then
@@ -870,7 +917,7 @@ function redraw()
     screen.text(anim.msg)
   end
 
-  -- ---- PAGE CONTENT ----
+  -- ---- LIVE ZONE (y 9-52) ----
   if page==1 then draw_bass_page()
   elseif page==2 then draw_drums_page()
   elseif page==3 then draw_chords_page()
@@ -879,15 +926,24 @@ function redraw()
   elseif page==6 then draw_global_page()
   end
 
-  -- ---- ENCODER SPARKLES (bottom edge) ----
-  for i=1,3 do
-    if anim.enc_spark[i] > 0.05 then
-      local ex = (i-1)*50 + 10
-      local sz = math.floor(anim.enc_spark[i]*3)
-      screen.level(math.floor(anim.enc_spark[i]*12))
-      screen.rect(ex, 60, sz, sz) screen.fill()
-    end
+  -- ---- CONTEXT BAR (y 53-58) ----
+  screen.level(3)
+  screen.move(0,52) screen.line(128,52) screen.stroke()
+  
+  local bpm = math.floor(40 + glob.tempo/127*180)
+  screen.level(6)
+  screen.move(0,60) screen.text("BPM:"..bpm)
+  
+  screen.level(5)
+  screen.move(35,60) screen.text("CH:"..BASS_CH)
+  
+  if page==1 or page==3 then
+    screen.level(6)
+    screen.move(55,60) screen.text(bass.scale.."/"..chords.scale)
   end
+  
+  screen.level(4)
+  screen.move(100,60) screen.text("MIDI:"..MIDI_DEV)
 
   -- ---- ALT BADGE ----
   if alt then
@@ -928,11 +984,12 @@ function init()
   gen_bass(); gen_drums(); gen_chords()
   push_bass_env(); push_chord_env(); push_global(); push_fx()
 
-  -- animation metro at ~60fps
-  redraw_metro = metro.init(anim_tick, 1/60, -1)
+  -- animation metro at ~10fps for smooth updates with beat phase tracking
+  redraw_metro = metro.init(anim_tick, 1/ANIM_FPS, -1)
   redraw_metro:start()
 
   anim.page_anim = 0
+  anim.beat_phase = 0
   toast("XYBOT ready")
   redraw()
 end
@@ -978,6 +1035,7 @@ function key(id,z)
           for ch=1,16 do if m then m:cc(123,0,ch) end end
           cc(1,CC.stop,127)
           step_vis=1
+          anim.beat_phase=0
           toast("■ stopped")
         end
       end
