@@ -214,6 +214,14 @@ local step_vis   = 1
 local pages      = {"BASS","DRUMS","CHORDS","FX","PRESETS","GLOBAL"}
 local page_icons = {"~","#","♦","∿","◈","✦"}
 
+-- Lattice visualization and gravity
+local gravity    = 0.0         -- 0.0-1.0: pull toward root position
+local lattice_x  = 4           -- lattice position (0-7 for 8 columns)
+local lattice_y  = 2           -- lattice position (0-3 for 4 rows)
+local lattice_root_x = 4       -- root note attractor x
+local lattice_root_y = 2       -- root note attractor y
+local velocity_topology = 0.5  -- brightness based on distance from root
+
 -- K1 hold timing for jam record / learn
 local k1_down_time = 0
 
@@ -619,6 +627,37 @@ local function step_cursor(sx, y, w, steps)
 end
 
 -- ============================================================
+-- LATTICE VISUALIZATION
+-- ============================================================
+local function draw_lattice_viz(x_offset, y_offset)
+  -- Draw 8x4 dot grid lattice
+  local cols, rows = 8, 4
+  local dot_spacing = 4
+  for row = 0, rows - 1 do
+    for col = 0, cols - 1 do
+      local x = x_offset + col * dot_spacing
+      local y = y_offset + row * dot_spacing
+      local is_current = (col == lattice_x and row == lattice_y)
+      local is_root = (col == lattice_root_x and row == lattice_root_y)
+
+      if is_current then
+        screen.level(15)
+        screen.circle(x, y, 1.5)
+        screen.fill()
+      elseif is_root then
+        screen.level(8)
+        screen.circle(x, y, 1)
+        screen.fill()
+      else
+        screen.level(3)
+        screen.circle(x, y, 0.5)
+        screen.fill()
+      end
+    end
+  end
+end
+
+-- ============================================================
 -- PAGE DRAWERS
 -- ============================================================
 local function draw_bass_page()
@@ -817,6 +856,11 @@ end
 local function draw_global_page()
   local bpm = math.floor(40 + glob.tempo/127*180)
 
+  -- Lattice visualization (top right corner)
+  screen.level(5)
+  screen.move(85, 12) screen.text("LATTICE")
+  draw_lattice_viz(85, 18)
+
   -- big BPM (active parameter at 15)
   screen.font_size(16)
   screen.level(playing and 15 or 8)
@@ -979,6 +1023,14 @@ function init()
   params:set_action("bass_root",function(v) bass.root=v; gen_bass() end)
   params:add_number("chord_root","Chord root",36,72,48)
   params:set_action("chord_root",function(v) chords.root=v; gen_chords() end)
+
+  params:add_separator("LATTICE")
+  params:add_control("gravity","Gravity",
+    controlspec.new(0, 1, "lin", 0.01, 0.0, ""))
+  params:set_action("gravity",function(v) gravity=v end)
+  params:add_control("velocity_topology","Velocity Topology",
+    controlspec.new(0, 1, "lin", 0.01, 0.5, ""))
+  params:set_action("velocity_topology",function(v) velocity_topology=v end)
 
   init_sequins()
   gen_bass(); gen_drums(); gen_chords()
@@ -1180,6 +1232,22 @@ clock.run(function()
     end
   end
 end)
+
+-- ============================================================
+-- MIDI NOTE INPUT (maps to lattice position)
+-- ============================================================
+function midi.event(data)
+  local msg = midi.to_msg(data)
+  if msg.type == "note_on" then
+    -- Map MIDI note number to lattice x (0-7)
+    lattice_x = msg.note % 8
+    -- Map velocity to lattice y (0-3), higher velocity = lower y
+    lattice_y = math.floor(msg.vel / 127 * 4)
+    lattice_y = math.min(3, lattice_y)
+    toast("lattice → x:"..lattice_x.." y:"..lattice_y)
+    redraw()
+  end
+end
 
 -- ============================================================
 -- CLEANUP
