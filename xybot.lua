@@ -36,6 +36,10 @@ local DRUM_NOTES = {
   tom_l=45, tom_h=50, ride=51,
 }
 
+local function midi_to_hz(note)
+  return 440 * 2^((note - 69) / 12)
+end
+
 local CC = {
   track_vol=7, track_mute=9, track_pan=10,
   param1=12, param2=13, param3=14, param4=15,
@@ -232,12 +236,14 @@ local bass = {
   pattern={}, notes={}, lengths={}, vels={},
   seq_density=nil, seq_scale=nil,
   auto_mutate=false, mutate_interval=8, mutate_count=0,
+  engine_notes = {},
 }
 local drums = {
   steps=16, density=0.5, swing=63,
   pattern={}, vels={},
   auto_mutate=false, mutate_interval=8, mutate_count=0,
   seq_density=nil,
+  engine_notes = {},
 }
 local chords = {
   root=48, scale="minor", chord_type="minor",
@@ -245,6 +251,7 @@ local chords = {
   vel_base=70, vel_rand=20,
   pattern={}, chord_notes={}, lengths={},
   auto_mutate=false, seq_chord=nil,
+  engine_notes = {},
 }
 local fx = {
   fx1_send=50, fx2_send=30,
@@ -449,9 +456,13 @@ local patt_bass,patt_chord,patt_kick,patt_snare,patt_hat,patt_mutate
 
 local function drum_hit(note,vel,len)
   note_on(DRUM_CH,note,vel)
+  local freq = midi_to_hz(note)
+  engine.noteOn(note, freq, vel / 127)
+  table.insert(drums.engine_notes, note)
   clock.run(function()
     clock.sleep(clock.get_beat_sec()*(len or 0.18))
     note_off(DRUM_CH,note)
+    engine.noteOff(note)
   end)
 end
 
@@ -467,9 +478,14 @@ local function build_lattice()
       if not glob.mute_bass and bass.pattern[bs] then
         local n=bass.notes[bs]; local v=bass.vels[bs]; local l=bass.lengths[bs]
         note_on(BASS_CH,n,v)
+        local freq = midi_to_hz(n)
+        engine.noteOn(n, freq, v / 127)
+        table.insert(bass.engine_notes, n)
         anim.bass_flash=1.0
         clock.run(function()
-          clock.sleep(clock.get_beat_sec()*l); note_off(BASS_CH,n)
+          clock.sleep(clock.get_beat_sec()*l)
+          note_off(BASS_CH,n)
+          engine.noteOff(n)
         end)
       end
       anim.play_pulse=1.0
@@ -487,11 +503,18 @@ local function build_lattice()
         local ns=chords.chord_notes[cs]; local l=chords.lengths[cs]
         for _,n in ipairs(ns) do
           note_on(CHORD_CH,n,rrand(chords.vel_base-chords.vel_rand,chords.vel_base+chords.vel_rand))
+          local freq = midi_to_hz(n)
+          local vel = rrand(chords.vel_base-chords.vel_rand,chords.vel_base+chords.vel_rand)
+          engine.noteOn(n, freq, vel / 127)
+          table.insert(chords.engine_notes, n)
         end
         anim.chord_flash=1.0
         clock.run(function()
           clock.sleep(clock.get_beat_sec()*l)
-          for _,n in ipairs(ns) do note_off(CHORD_CH,n) end
+          for _,n in ipairs(ns) do
+            note_off(CHORD_CH,n)
+            engine.noteOff(n)
+          end
         end)
       end
     end
@@ -1085,6 +1108,7 @@ function key(id,z)
         else
           if the_lattice then the_lattice:destroy(); the_lattice=nil end
           for ch=1,16 do if m then m:cc(123,0,ch) end end
+          engine.noteOffAll()
           cc(1,CC.stop,127)
           step_vis=1
           anim.beat_phase=0
@@ -1256,4 +1280,5 @@ function cleanup()
   if redraw_metro then redraw_metro:stop() end
   if the_lattice then the_lattice:destroy() end
   if m then for ch=1,16 do m:cc(123,0,ch) end end
+  engine.noteOffAll()
 end
