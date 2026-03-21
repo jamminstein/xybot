@@ -267,6 +267,17 @@ local glob = {
 }
 
 -- ============================================================
+-- OP-XY MIDI
+-- ============================================================
+local opxy_out = nil
+local function opxy_note_on(note, vel)
+  if opxy_out then opxy_out:note_on(note, vel, params:get("opxy_channel")) end
+end
+local function opxy_note_off(note)
+  if opxy_out then opxy_out:note_off(note, 0, params:get("opxy_channel")) end
+end
+
+-- ============================================================
 -- HELPERS
 -- ============================================================
 local function cc(ch,num,val)
@@ -274,9 +285,11 @@ local function cc(ch,num,val)
 end
 local function note_on(ch,note,vel)
   if m then m:note_on(note,math.floor(vel or 100),ch) end
+  opxy_note_on(note, math.floor(vel or 100))
 end
 local function note_off(ch,note)
   if m then m:note_off(note,0,ch) end
+  opxy_note_off(note)
 end
 local function rrand(lo,hi) return lo+math.floor(math.random()*(hi-lo+1)) end
 
@@ -1049,6 +1062,12 @@ function init()
   params:add_number("chord_root","Chord root",36,72,48)
   params:set_action("chord_root",function(v) chords.root=v; gen_chords() end)
 
+  params:add_separator("OP-XY MIDI")
+  params:add{type="number", id="opxy_device", name="OP-XY Device", min=1, max=16, default=2,
+    action=function(v) opxy_out = midi.connect(v) end}
+  params:add{type="number", id="opxy_channel", name="OP-XY Channel", min=1, max=16, default=1}
+  opxy_out = midi.connect(2)
+
   params:add_separator("LATTICE")
   params:add_control("gravity","Gravity",
     controlspec.new(0, 1, "lin", 0.01, 0.0, ""))
@@ -1282,5 +1301,6 @@ function cleanup()
   if redraw_metro then redraw_metro:stop() end
   if the_lattice then the_lattice:destroy() end
   if m then for ch=1,16 do m:cc(123,0,ch) end end
+  if opxy_out then for ch=1,16 do opxy_out:cc(123,0,ch) end end
   engine.noteOffAll()
 end
