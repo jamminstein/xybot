@@ -1129,7 +1129,7 @@ function key(id,z)
         else
           if the_lattice then the_lattice:destroy(); the_lattice=nil end
           for ch=1,16 do if m then m:cc(123,0,ch) end end
-          engine.noteOffAll()
+          for n=0,127 do pcall(function() engine.noteOff(n) end) end
           cc(1,CC.stop,127)
           step_vis=1
           anim.beat_phase=0
@@ -1302,5 +1302,6 @@ function cleanup()
   if the_lattice then the_lattice:destroy() end
   if m then for ch=1,16 do m:cc(123,0,ch) end end
   if opxy_out then for ch=1,16 do opxy_out:cc(123,0,ch) end end
-  engine.noteOffAll()
+  -- PolySub: noteOff per-voice (no noteOffAll command)
+  for n=0,127 do pcall(function() engine.noteOff(n) end) end
 end
