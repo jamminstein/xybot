@@ -18,6 +18,8 @@
 --   K3 in jam mode    : playback recorded jam
 --   MIDI learn        : next CC received maps to focused param
 
+engine.name = "PolySub"
+
 local lattice   = require "lattice"
 local sequins   = require "sequins"
 local musicutil = require "musicutil"
