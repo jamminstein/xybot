@@ -944,36 +944,33 @@ function redraw()
   screen.font_size(8)
 
   -- ---- STATUS STRIP (y 0-8) ----
-  -- play state indicator
-  local play_lvl = playing and brightness(anim.play_pulse,8,15) or 4
-  screen.level(play_lvl)
-  screen.move(0,8)
-  screen.text(playing and "▶" or "■")
+  -- play state
+  screen.level(playing and 15 or 4)
+  screen.move(2, 7)
+  screen.text(playing and ">" or ".")
 
-  -- title "XYBOT" at level 4 top-left
-  screen.level(4)
-  screen.move(8,8)
-  screen.text("XYBOT")
-
-  -- page indicator: 6 small dots, current page filled at 12, others at 3
-  for i=1,6 do
-    screen.level(i==page and 12 or 3)
-    screen.rect(64 + (i-1)*8, 2, 4, 4)
-    if i==page then screen.fill() else screen.stroke() end
-  end
-
-  -- page name at level 8 center
-  screen.level(8)
-  screen.move(56, 8)
+  -- page name left of center
+  screen.level(10)
+  screen.move(12, 7)
   screen.text(pages[page])
 
-  -- beat pulse dot at x=124
-  screen.level(brightness(anim.beat_phase, 3, 12))
-  screen.rect(123, 5, 3, 3) screen.fill()
+  -- page dots right side
+  for i = 1, 6 do
+    screen.level(i == page and 15 or 3)
+    screen.pixel(90 + (i - 1) * 6, 4)
+    screen.fill()
+  end
 
-  -- header line (structure/dividers at level 3)
-  screen.level(3)
-  screen.move(0,9) screen.line(128,9) screen.stroke()
+  -- beat pulse
+  screen.level(brightness(anim.beat_phase, 3, 12))
+  screen.pixel(124, 4)
+  screen.fill()
+
+  -- divider
+  screen.level(2)
+  screen.move(0, 9)
+  screen.line(128, 9)
+  screen.stroke()
 
   -- ---- JAM RECORD / LEARN INDICATORS ----
   if jam_record_enabled then
