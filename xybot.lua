@@ -940,7 +940,7 @@ end
 -- ============================================================
 function redraw()
   screen.clear()
-  screen.aa(1)  -- anti-alias enabled for smooth lines
+  screen.aa(0)  -- anti-alias enabled for smooth lines
   screen.font_size(8)
 
   -- ---- STATUS STRIP (y 0-8) ----
